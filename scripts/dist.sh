@@ -12,9 +12,10 @@
 # build are still written, so a partial local run still produces something
 # usable).
 #
-# GOOS/GOARCH<->triple pairs and the six-binary suite roster mirror
-# internal/release/assets.go (`triples`, `SuiteBinaries`) -- the Go upgrade
-# client's ground truth for what a release must contain. The dispatcher's
+# GOOS/GOARCH<->triple pairs mirror internal/release/assets.go (`triples`); the
+# suite/Go binary rosters are read from that same package via the suite-bins
+# lister (orchardist#820), the Go upgrade client's ground truth for what a
+# release must contain -- no hand-mirrored copy to drift. The dispatcher's
 # tarball name/contents (orchard-<triple>.tar.gz, containing one file named
 # `orchard`) is unchanged: npm/install.js hardcodes it (plan AC12).
 #
@@ -93,7 +94,17 @@ if [ -n "$ONLY_TRIPLE" ]; then
   PLATFORMS=("${filtered[@]}")
 fi
 
-GO_BINS=(orchard-daemon orchard-sidebar orchard-shell orchard-upgrade)
+# Suite binary sets read from internal/release via the suite-bins lister, so no
+# hand-mirrored copy can drift from SuiteBinaries (orchardist#820). Captured
+# once here, never inside a loop: `go run` recompiles per call. GOOS/GOARCH are
+# NOT exported in this script (each `go build` sets them inline), so the lister
+# builds for the host and needs no `env -u` guard.
+go_bins_raw="$(cd "$ROOT" && go run ./internal/release/cmd/suite-bins go)"
+suite_bins_raw="$(cd "$ROOT" && go run ./internal/release/cmd/suite-bins suite)"
+# shellcheck disable=SC2206  # one binary name per line, no spaces -- word-split is intended
+GO_BINS=($go_bins_raw)
+# shellcheck disable=SC2206
+SUITE_BINS=($suite_bins_raw)
 
 installed_rust_targets="$(rustup target list --installed 2>/dev/null || true)"
 host_triple="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')"
@@ -257,7 +268,7 @@ for entry in "${PLATFORMS[@]}"; do
   if [[ "$have_go" -eq 1 && "$have_rust" -eq 1 ]]; then
     suite_dir="$work/suite-$triple"
     mkdir -p "$suite_dir"
-    for bin in "${GO_BINS[@]}" orchard-tui orchard; do
+    for bin in "${SUITE_BINS[@]}"; do
       cp "$platform_dir/$bin" "$suite_dir/$bin"
     done
     tar czf "$DIST/orchard-suite-$triple.tar.gz" -C "$suite_dir" .
