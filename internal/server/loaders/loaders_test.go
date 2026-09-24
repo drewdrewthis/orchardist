@@ -35,7 +35,7 @@ func TestProcessLoaderBatchesByPid(t *testing.T) {
 	}
 
 	bundle := &loaders.ProvidersBundle{Ps: psProv}
-	l := loaders.NewLoaders(bundle)
+	l := loaders.NewLoadersForTest(bundle, 50)
 
 	thunks := make([]func() (*graphql1.Process, error), 0, N)
 	for i := 0; i < N; i++ {
@@ -65,7 +65,7 @@ func TestHostLoaderBatchesByID(t *testing.T) {
 	}
 
 	bundle := &loaders.ProvidersBundle{Host: provider}
-	l := loaders.NewLoaders(bundle)
+	l := loaders.NewLoadersForTest(bundle, 32)
 
 	ctx := context.Background()
 	const N = 32
@@ -103,7 +103,7 @@ func TestWorktreeLoaderBatchesByCwd(t *testing.T) {
 		{ID: "demo", Slug: "demo", Path: dir},
 	}}
 	bundle := &loaders.ProvidersBundle{Git: gitProv, Repos: repos}
-	l := loaders.NewLoaders(bundle)
+	l := loaders.NewLoadersForTest(bundle, 25)
 
 	ctx := context.Background()
 	const N = 25
@@ -199,7 +199,7 @@ func TestPullRequestsForRepo_BatchesIntraRepo(t *testing.T) {
 	stub.prs["owner/repo"] = 2 // 2 PRs for this repo
 
 	bundle := &loaders.ProvidersBundle{GH: stub}
-	l := loaders.NewLoaders(bundle)
+	l := loaders.NewLoadersForTest(bundle, 8)
 
 	ctx := context.Background()
 	const N = 8
@@ -242,7 +242,7 @@ func TestPullRequestsForRepo_BatchesAcrossRepos(t *testing.T) {
 	}
 
 	bundle := &loaders.ProvidersBundle{GH: stub}
-	l := loaders.NewLoaders(bundle)
+	l := loaders.NewLoadersForTest(bundle, 40)
 
 	ctx := context.Background()
 	const perRepo = 8
@@ -434,7 +434,7 @@ func (s *prEnrichStub) CallCount() int {
 func TestPullRequestEnrichment_BatchesIntraRepo(t *testing.T) {
 	stub := &prEnrichStub{}
 	bundle := &loaders.ProvidersBundle{GHEnricher: stub}
-	l := loaders.NewLoaders(bundle)
+	l := loaders.NewLoadersForTest(bundle, 10)
 
 	ctx := context.Background()
 	const N = 10
@@ -469,7 +469,7 @@ func TestPullRequestEnrichment_BatchesIntraRepo(t *testing.T) {
 func TestPullRequestEnrichment_BatchesByRepo(t *testing.T) {
 	stub := &prEnrichStub{}
 	bundle := &loaders.ProvidersBundle{GHEnricher: stub}
-	l := loaders.NewLoaders(bundle)
+	l := loaders.NewLoadersForTest(bundle, 15)
 
 	ctx := context.Background()
 	repos := []struct{ owner, name string }{

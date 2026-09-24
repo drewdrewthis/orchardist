@@ -51,6 +51,11 @@ type Provider struct {
 	subMu sync.Mutex
 	subs  map[chan adapter.InvalidationEvent[ConversationID]]struct{}
 
+	// subscribeHook, when non-nil, fires after a subscriber registers.
+	// Test-only signal (nil in production) so an e2e subscription test can
+	// block on real registration instead of a fixed sleep (issue #818).
+	subscribeHook func()
+
 	startOnce sync.Once
 	stopOnce  sync.Once
 	stopCh    chan struct{}
@@ -226,6 +231,19 @@ func (p *Provider) List(_ context.Context) ([]Conversation, error) {
 	return out, nil
 }
 
+// SetSubscribeHookForTest installs a callback fired after each Subscribe
+// registers its channel. Test-only seam (issue #818): nil in production,
+// so subscription behaviour is unchanged.
+//
+// Lives in production (not export_test.go) for the same reason as
+// peerproxy.WithProbeHookForTest: cross-package tests must reach it, which
+// an internal export_test.go symbol cannot serve, and it is nil by default.
+func (p *Provider) SetSubscribeHookForTest(h func()) {
+	p.subMu.Lock()
+	p.subscribeHook = h
+	p.subMu.Unlock()
+}
+
 // Subscribe returns a buffered channel that receives invalidation
 // events for as long as ctx is alive. Closing ctx (or calling Stop)
 // cleans the subscription up.
@@ -233,7 +251,11 @@ func (p *Provider) Subscribe(ctx context.Context) <-chan adapter.InvalidationEve
 	ch := make(chan adapter.InvalidationEvent[ConversationID], 8)
 	p.subMu.Lock()
 	p.subs[ch] = struct{}{}
+	hook := p.subscribeHook
 	p.subMu.Unlock()
+	if hook != nil {
+		hook()
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -391,8 +413,11 @@ func (p *Provider) reload(ctx context.Context, reason string, source adapter.Fre
 		p.fresh[k] = adapter.Freshness{LastFetchedAt: now, Source: source}
 	}
 	p.loaded = true
-	p.mu.Unlock()
 
+	// Compute the changed set while still holding p.mu. `all` is now the
+	// live p.cache, so once we unlock the run-loop goroutine's cachePut may
+	// write into it — an unlocked range over `all` would race that write.
+	// `old` is the detached previous map and has no concurrent writer.
 	changed := make([]ConversationID, 0)
 	for k, v := range all {
 		ov, had := old[k]
@@ -405,6 +430,8 @@ func (p *Provider) reload(ctx context.Context, reason string, source adapter.Fre
 			changed = append(changed, k)
 		}
 	}
+	p.mu.Unlock()
+
 	if len(changed) == 0 && reason == "boot" {
 		return nil
 	}
