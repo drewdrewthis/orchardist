@@ -113,13 +113,10 @@ func paneRowWithCommand(sessionName, paneID string, pid int, currentCommand stri
 // Fake ps CommandRunner
 // --------------------------------------------------------------------------
 
-// psRow holds a single process row for the fake ps runner. ppid is optional:
-// when 0 it defaults to 1 (init), so single-process rows need not set it;
-// descendant-tree tests (#711) set it to build a real bash -> claude parentage.
+// psRow holds a single (pid, command) pair for the fake ps runner.
 type psRow struct {
-	pid  int
-	ppid int
-	cmd  string
+	pid int
+	cmd string
 }
 
 // fakePsRunnerProcess drives the ps adapter with a fixed single-process list.
@@ -136,14 +133,10 @@ func (f *fakePsRunnerProcess) Run(_ context.Context, name string, args ...string
 	}
 	lines := []string{psHeaderTest}
 	for _, r := range f.rows {
-		ppid := r.ppid
-		if ppid == 0 {
-			ppid = 1
-		}
 		// Columns: PID PPID USER TTY %CPU RSS STARTED COMMAND
 		lines = append(lines, fmt.Sprintf(
-			"%d %d root ?? 0.0 1024 Sun May  4 10:00:00 2026 %s",
-			r.pid, ppid, r.cmd,
+			"%d 1 root ?? 0.0 1024 Sun May  4 10:00:00 2026 %s",
+			r.pid, r.cmd,
 		))
 	}
 	return []byte(strings.Join(lines, "\n") + "\n"), nil
